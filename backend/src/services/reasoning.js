@@ -2,6 +2,22 @@ const Groq = require('groq-sdk');
 
 const groq = process.env.GROQ_API_KEY ? new Groq({ apiKey: process.env.GROQ_API_KEY }) : null;
 
+// Plain-language description of each signal type, used only when telling the
+// model (or the fallback text) that ANOTHER signal fired on the same stock
+// at the same time. Deliberately not the raw signal_type string or the UI's
+// badge label ("Volume anomaly") — this is prose, not a category name.
+const PLAIN_SIGNAL_DESCRIPTIONS = {
+  price_move: 'a bigger price move than usual',
+  volume_anomaly: 'far more shares trading than usual',
+  range_breach: 'a new session high or low',
+};
+
+function describeCoOccurring(coOccurringSignals) {
+  if (!coOccurringSignals || coOccurringSignals.length === 0) return null;
+  const parts = coOccurringSignals.map((s) => PLAIN_SIGNAL_DESCRIPTIONS[s] || s);
+  return parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
+}
+
 /**
  * Turns a flagged signal (rule-based, already decided) into a short,
  * plain-language explanation. The LLM does NOT decide significance —
@@ -45,6 +61,15 @@ async function explainAlert({ symbol, signal_type, detail }) {
             '2.2x, during a choppy price shape."\n' +
             'Example of GOOD (plain): "GRWFIN jumped 3.23% — more than double the size of its usual ' +
             'moves — after bouncing back and forth without a clear direction."\n\n' +
+            'Sometimes the input tells you another signal fired on the SAME stock at the SAME time ' +
+            '(for example, a price jump alongside a volume surge). When that happens, treat it as ' +
+            'one connected event, not two separate facts — weave the connection into one of your ' +
+            'sentences (e.g. "...and it came with a lot more shares trading too") instead of ' +
+            'ignoring it or bolting on an unrelated third sentence. Still just 1-2 sentences total.\n\n' +
+            'Example of BAD (ignores the connection): "GRWFIN jumped 3.76%. GRWFIN also traded far ' +
+            'more shares than usual."\n' +
+            'Example of GOOD (connects them): "GRWFIN jumped 3.76%, and it came with far more shares ' +
+            'trading than usual too — a bigger move than usual on unusually heavy trading."\n\n' +
             'Do not pad sentences with generic hedge phrases like "may indicate" or "could signal" ' +
             'as filler — if you genuinely don\'t know the cause, say what happened concretely and ' +
             'let the reader draw their own conclusion, rather than listing vague possibilities. ' +
@@ -85,9 +110,10 @@ function buildPrompt(symbol, signal_type, detail) {
   // are exactly the phrases we don't want the model echoing back, so we
   // don't feed them in that shape to begin with. The system prompt bans the
   // jargon as a backstop; this is the actual fix (don't put it in reach).
+  let parts;
   if (signal_type === 'price_move') {
     const pct = (detail.pctChange * 100).toFixed(2);
-    const parts = [`${symbol} moved ${pct}% (from ${detail.previousPrice} to ${detail.currentPrice}).`];
+    parts = [`${symbol} moved ${pct}% (from ${detail.previousPrice} to ${detail.currentPrice}).`];
     if (detail.multipleOfThreshold) {
       const usualMovePct = (detail.volatilityThreshold * 100).toFixed(1);
       parts.push(`For context, this stock's price normally moves less than about ${usualMovePct}% at a time — this move was roughly ${detail.multipleOfThreshold.toFixed(1)} times bigger than that.`);
@@ -95,36 +121,43 @@ function buildPrompt(symbol, signal_type, detail) {
     if (detail.trend) {
       parts.push(`Recent price shape: ${detail.trend}.`);
     }
-    return parts.join(' ');
-  }
-  if (signal_type === 'volume_anomaly') {
+  } else if (signal_type === 'volume_anomaly') {
     const ratio = detail.ratio.toFixed(1);
-    const parts = [`${symbol} had ${detail.currentVolume} shares traded, compared to a typical ${Math.round(detail.avgVolume)} shares over its recent average — about ${ratio} times more than usual.`];
+    parts = [`${symbol} had ${detail.currentVolume} shares traded, compared to a typical ${Math.round(detail.avgVolume)} shares over its recent average — about ${ratio} times more than usual.`];
     if (detail.trend) {
       parts.push(`Recent volume shape: ${detail.trend}.`);
     }
-    return parts.join(' ');
-  }
-  if (signal_type === 'range_breach') {
+  } else if (signal_type === 'range_breach') {
     const direction = detail.direction === 'high' ? 'a new session high' : 'a new session low';
-    return `${symbol} just hit ${direction} of ${detail.currentPrice}, breaking past its prior ${detail.direction === 'high' ? 'high' : 'low'} of ${detail.priorExtreme} for this session.`;
+    parts = [`${symbol} just hit ${direction} of ${detail.currentPrice}, breaking past its prior ${detail.direction === 'high' ? 'high' : 'low'} of ${detail.priorExtreme} for this session.`];
+  } else {
+    parts = [`${symbol} triggered a ${signal_type} signal.`];
   }
-  return `${symbol} triggered a ${signal_type} signal.`;
+
+  const coOccurring = describeCoOccurring(detail.coOccurringSignals);
+  if (coOccurring) {
+    parts.push(`At the same time, this same stock is ALSO showing: ${coOccurring}. This is one connected event — mention the connection.`);
+  }
+
+  return parts.join(' ');
 }
 
 function fallbackExplanation(symbol, signal_type, detail) {
+  const coOccurring = describeCoOccurring(detail.coOccurringSignals);
+  const coOccurringSuffix = coOccurring ? ` — alongside ${coOccurring}` : '';
+
   if (signal_type === 'price_move') {
     const pct = (detail.pctChange * 100).toFixed(2);
     const direction = detail.pctChange >= 0 ? 'up' : 'down';
-    return `${symbol} moved ${direction} ${Math.abs(pct)}% — a bigger move than usual for this stock.`;
+    return `${symbol} moved ${direction} ${Math.abs(pct)}% — a bigger move than usual for this stock${coOccurringSuffix}.`;
   }
   if (signal_type === 'volume_anomaly') {
     const ratio = detail.ratio.toFixed(1);
-    return `${symbol} had far more shares traded than usual today — about ${ratio} times its normal amount.`;
+    return `${symbol} had far more shares traded than usual today — about ${ratio} times its normal amount${coOccurringSuffix}.`;
   }
   if (signal_type === 'range_breach') {
     const direction = detail.direction === 'high' ? 'high' : 'low';
-    return `${symbol} hit a new session ${direction} of ${detail.currentPrice}.`;
+    return `${symbol} hit a new session ${direction} of ${detail.currentPrice}${coOccurringSuffix}.`;
   }
   return `${symbol} triggered a notable ${signal_type} signal.`;
 }

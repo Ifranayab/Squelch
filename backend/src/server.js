@@ -5,6 +5,7 @@ const cors = require('cors');
 const apiRoutes = require('./routes/api');
 const dataGenerator = require('./services/dataGenerator');
 const { runScanForTicker, runFullScan } = require('./services/scanJob');
+const { seedTickers } = require('./db/seed');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -32,6 +33,12 @@ app.use('/api', apiRoutes);
 
 app.listen(PORT, () => {
   console.log(`Backend listening on port ${PORT}`);
+
+  // Idempotent — safe on a warm DB, and the only reliable way to seed on
+  // Render's free tier where the disk resets every redeploy and there's no
+  // Shell tab to run this by hand.
+  const seededCount = seedTickers();
+  console.log(`[startup] ensured ${seededCount} tickers exist`);
 
   // Start synthetic data generator. When a scripted anomaly fires, immediately
   // run the signal engine for that ticker rather than waiting for a separate

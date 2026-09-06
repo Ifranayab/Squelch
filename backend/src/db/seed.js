@@ -16,10 +16,26 @@ const tickers = [
   { symbol: 'TELCOM', name: 'Telcom Networks (demo)', base_price: 540.0, volatility: 0.018 },
 ];
 
-const insert = db.prepare(
-  `INSERT OR IGNORE INTO tickers (symbol, name, base_price, volatility) VALUES (@symbol, @name, @base_price, @volatility)`
-);
+// Exported so server.js can call this on every boot, not just via the CLI.
+// `INSERT OR IGNORE` makes this safe to run repeatedly — already-seeded rows
+// are left untouched, so calling it on every startup costs nothing on a
+// warm database and fixes an empty one automatically. This matters on
+// Render's free tier specifically: the disk (and therefore the SQLite file)
+// gets wiped on every redeploy, and free services don't get Shell access to
+// run the seed script by hand — so "seed on boot if needed" isn't just a
+// convenience here, it's the only way to reliably seed at all.
+function seedTickers() {
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO tickers (symbol, name, base_price, volatility) VALUES (@symbol, @name, @base_price, @volatility)`
+  );
+  tickers.forEach((t) => insert.run(t));
+  return tickers.length;
+}
 
-tickers.forEach((t) => insert.run(t));
+// Still runnable standalone via `node src/db/seed.js` for local dev.
+if (require.main === module) {
+  const count = seedTickers();
+  console.log(`Seeded ${count} tickers.`);
+}
 
-console.log(`Seeded ${tickers.length} tickers.`);
+module.exports = { seedTickers };

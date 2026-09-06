@@ -175,9 +175,28 @@ function evaluateTicker(symbol) {
 
   const createdAlerts = [];
 
-  // --- Price move signal (normalized by the ticker's own volatility) ---
+  // Check which signals actually fire BEFORE building any alert. This is
+  // what lets each one know about the others — a price spike that also came
+  // with a volume surge is a materially different (and more meaningful)
+  // situation than either alone, and the explanation should say so instead
+  // of describing them as two unrelated facts.
   const priceDetail = getPriceMoveDetail(symbol);
-  if (priceDetail && Math.abs(priceDetail.pctChange) >= ticker.volatility) {
+  const priceFires = !!(priceDetail && Math.abs(priceDetail.pctChange) >= ticker.volatility);
+
+  const volumeDetail = getVolumeAnomalyDetail(symbol);
+  const volumeFires = !!(volumeDetail && volumeDetail.ratio >= VOLUME_ANOMALY_MULTIPLIER);
+
+  const rangeDetail = getRangeBreachDetail(symbol);
+  const rangeFires = !!rangeDetail;
+
+  const firingSignals = [
+    priceFires && 'price_move',
+    volumeFires && 'volume_anomaly',
+    rangeFires && 'range_breach',
+  ].filter(Boolean);
+
+  // --- Price move signal (normalized by the ticker's own volatility) ---
+  if (priceFires) {
     // Enrich with context the reasoning layer actually needs to say something
     // concrete: how many multiples of this stock's normal move this is, and
     // whether it's a sudden spike or part of a building trend.
@@ -186,6 +205,7 @@ function evaluateTicker(symbol) {
       volatilityThreshold: ticker.volatility,
       multipleOfThreshold: Math.abs(priceDetail.pctChange) / ticker.volatility,
       trend: getTrendDescriptor(symbol, 'price'),
+      coOccurringSignals: firingSignals.filter((s) => s !== 'price_move'),
     };
     watchers.forEach((userId) => {
       if (isMuted(userId, symbol, 'price_move')) return;
@@ -200,9 +220,12 @@ function evaluateTicker(symbol) {
   }
 
   // --- Volume anomaly signal ---
-  const volumeDetail = getVolumeAnomalyDetail(symbol);
-  if (volumeDetail && volumeDetail.ratio >= VOLUME_ANOMALY_MULTIPLIER) {
-    const enrichedDetail = { ...volumeDetail, trend: getTrendDescriptor(symbol, 'volume') };
+  if (volumeFires) {
+    const enrichedDetail = {
+      ...volumeDetail,
+      trend: getTrendDescriptor(symbol, 'volume'),
+      coOccurringSignals: firingSignals.filter((s) => s !== 'volume_anomaly'),
+    };
     watchers.forEach((userId) => {
       if (isMuted(userId, symbol, 'volume_anomaly')) return;
       if (findExistingPending.get(userId, symbol, 'volume_anomaly')) return;
@@ -216,15 +239,18 @@ function evaluateTicker(symbol) {
   }
 
   // --- Session high/low breach ---
-  const rangeDetail = getRangeBreachDetail(symbol);
-  if (rangeDetail) {
+  if (rangeFires) {
+    const enrichedRangeDetail = {
+      ...rangeDetail,
+      coOccurringSignals: firingSignals.filter((s) => s !== 'range_breach'),
+    };
     watchers.forEach((userId) => {
       if (isMuted(userId, symbol, 'range_breach')) return;
       if (findExistingPending.get(userId, symbol, 'range_breach')) return;
       if (hasRecentAlert(userId, symbol, 'range_breach')) return;
 
-      const result = insertAlert.run(userId, symbol, 'range_breach', JSON.stringify(rangeDetail));
-      createdAlerts.push({ id: result.lastInsertRowid, userId, symbol, signal_type: 'range_breach', detail: rangeDetail });
+      const result = insertAlert.run(userId, symbol, 'range_breach', JSON.stringify(enrichedRangeDetail));
+      createdAlerts.push({ id: result.lastInsertRowid, userId, symbol, signal_type: 'range_breach', detail: enrichedRangeDetail });
     });
   }
 
