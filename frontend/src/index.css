@@ -1,0 +1,72 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+
+:root {
+  --color-bg: #FAFAF7;
+  --color-text: #1A1D1B;
+  --color-text-muted: #6B6E6A;
+  --color-accent: #0F7A5C;
+  --color-accent-soft: #E5F0EC;
+  --color-attention: #B8452F;
+  --color-attention-soft: #F5E9E5;
+  --color-info: #3D5A80;
+  --color-info-soft: #E8ECF2;
+  --color-border: #DEDCD4;
+  --color-surface: #FFFFFF;
+
+  --font-display: 'Space Grotesk', sans-serif;
+  --font-body: 'IBM Plex Sans', sans-serif;
+
+  --radius: 4px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+h1, h2, h3 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  margin: 0;
+}
+
+.numeric {
+  font-family: var(--font-display);
+  font-variant-numeric: tabular-nums;
+}
+
+button {
+  font-family: var(--font-body);
+  cursor: pointer;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}
